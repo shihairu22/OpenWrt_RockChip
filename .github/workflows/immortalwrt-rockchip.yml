@@ -339,3 +339,17 @@ jobs:
       with:
          name: |
             bin-archive
+
+    - name: Clean workspace (free disk)
+      # 每轮编译会在工作区留下 ~90G：build_dir 64G + staging_dir 5G + bin 6.5G + tmp 6G。
+      # 产物已经进了 release，这里收尾清掉，免得磁盘被逐轮吃满（实测两轮就吃掉 156G）。
+      # 注意 dl 是软链，不带尾斜杠的 rm -rf 只删链接、不碰共享缓存 dl-cache。
+      if: always()
+      run: |
+          set -u
+          for D in "$GITHUB_WORKSPACE"/openwrt openwrt; do
+            [ -d "$D" ] || continue
+            echo "清理 $D  大小 $(du -sh "$D" 2>/dev/null | cut -f1)"
+            rm -rf -- "$D"
+          done
+          echo "剩余空间："; df -h "$GITHUB_WORKSPACE" | tail -1
