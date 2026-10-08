@@ -285,6 +285,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
           set -u
+          TMPD=$(mktemp -d -p "${RUNNER_TEMP:-/tmp}")   # 私有临时目录：绝不用固定的 /tmp/xxx（sticky bit 下会被别人的同名文件挡住）；基目录优先 RUNNER_TEMP，防 TMPDIR 被带偏到不可写处
           TAG="${{ steps.tag.outputs.release_tag }}"
           REPO="${{ github.repository }}"
           DIR="${{ env.FIRMWARE }}"
@@ -298,13 +299,13 @@ jobs:
           echo "release id=$RID"
 
           # 列表取不到就中止——绝不能让「空列表」被当成「全都缺」而全量重传
-          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have.txt; then
-            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have.txt \
+          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have.txt; then
+            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have.txt \
               || { echo "::error::资产列表取不到，中止"; exit 1; }
           fi
-          ls -1 "$DIR" > /tmp/want.txt
-          grep -vxF -f /tmp/have.txt /tmp/want.txt > /tmp/miss.txt || true
-          echo "应有 $(wc -l < /tmp/want.txt) 个 / 已有 $(wc -l < /tmp/have.txt) 个 / 需补传 $(wc -l < /tmp/miss.txt) 个"
+          ls -1 "$DIR" > $TMPD/want.txt
+          grep -vxF -f $TMPD/have.txt $TMPD/want.txt > $TMPD/miss.txt || true
+          echo "应有 $(wc -l < $TMPD/want.txt) 个 / 已有 $(wc -l < $TMPD/have.txt) 个 / 需补传 $(wc -l < $TMPD/miss.txt) 个"
 
           while IFS= read -r f; do
             [ -z "$f" ] && continue
@@ -318,22 +319,22 @@ jobs:
               echo "  第 $a 次失败：$f"
             done
             [ $ok -eq 0 ] && echo "::warning::$f 补传失败"
-          done < /tmp/miss.txt
+          done < $TMPD/miss.txt
 
           # 复核：全齐才转正
-          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have2.txt; then
-            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have2.txt \
+          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have2.txt; then
+            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have2.txt \
               || { echo "::error::复核取不到列表，中止"; exit 1; }
           fi
-          grep -vxF -f /tmp/have2.txt /tmp/want.txt > /tmp/miss2.txt || true
-          if [ -s /tmp/miss2.txt ]; then
-            echo "::error::仍缺 $(wc -l < /tmp/miss2.txt) 个资产，不转正："
-            cat /tmp/miss2.txt
+          grep -vxF -f $TMPD/have2.txt $TMPD/want.txt > $TMPD/miss2.txt || true
+          if [ -s $TMPD/miss2.txt ]; then
+            echo "::error::仍缺 $(wc -l < $TMPD/miss2.txt) 个资产，不转正："
+            cat $TMPD/miss2.txt
             exit 1
           fi
           gdirect release edit "$TAG" -R "$REPO" --draft=false --latest \
             || gproxy release edit "$TAG" -R "$REPO" --draft=false --latest
-          echo "✅ $(wc -l < /tmp/have2.txt) 个资产齐全，release 已转正"
+          echo "✅ $(wc -l < $TMPD/have2.txt) 个资产齐全，release 已转正"
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
