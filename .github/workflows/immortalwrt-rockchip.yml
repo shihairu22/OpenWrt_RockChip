@@ -244,14 +244,83 @@ jobs:
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@master
+      # 上传单独走直连：实测经 NAS 代理到 uploads.github.com 仅 0.04 MB/s，
+      # 直连 260MB 单文件 7.9-8.2 MB/s（快约 200 倍）。runner 的 .env 会把代理注入每个步骤，
+      # 而 github.com 不在 no_proxy 里，所以这里必须显式置空。
+      # continue-on-error：个别文件传失败不再把整步判死，交给下一步兜底。
+      continue-on-error: true
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          http_proxy: ""
+          https_proxy: ""
+          HTTP_PROXY: ""
+          HTTPS_PROXY: ""
+          no_proxy: "*"
+          NO_PROXY: "*"
       with:
           name: ${{ steps.tag.outputs.release_date }} immortalwrt
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
           files: ${{ env.FIRMWARE }}/*
+
+    - name: Verify and finish release upload
+      # 兜底：逐文件比对远端资产名，缺的用 gh 重试补齐，全齐后才转正 release。
+      # 避免「传了 21/24 却整步失败、release 卡在 draft」。
+      if: always() && steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+          set -u
+          TAG="${{ steps.tag.outputs.release_tag }}"
+          REPO="${{ github.repository }}"
+          DIR="${{ env.FIRMWARE }}"
+          # 直连优先（快约 200 倍），失败回退代理
+          gdirect() { env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy no_proxy='*' NO_PROXY='*' gh "$@"; }
+          gproxy()  { http_proxy=http://10.0.0.221:7890 https_proxy=http://10.0.0.221:7890 no_proxy='10.0.0.0/8,127.0.0.1,localhost,::1' gh "$@"; }
+
+          RID=$(gdirect api "repos/$REPO/releases/tags/$TAG" --jq .id 2>/dev/null) \
+            || RID=$(gproxy api "repos/$REPO/releases/tags/$TAG" --jq .id 2>/dev/null) \
+            || { echo "::error::取不到 release id，中止"; exit 1; }
+          echo "release id=$RID"
+
+          # 列表取不到就中止——绝不能让「空列表」被当成「全都缺」而全量重传
+          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have.txt; then
+            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have.txt \
+              || { echo "::error::资产列表取不到，中止"; exit 1; }
+          fi
+          ls -1 "$DIR" > /tmp/want.txt
+          grep -vxF -f /tmp/have.txt /tmp/want.txt > /tmp/miss.txt || true
+          echo "应有 $(wc -l < /tmp/want.txt) 个 / 已有 $(wc -l < /tmp/have.txt) 个 / 需补传 $(wc -l < /tmp/miss.txt) 个"
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            ok=0
+            for a in 1 2 3 4; do
+              if [ $((a % 2)) -eq 1 ]; then
+                gdirect release upload "$TAG" "$DIR/$f" -R "$REPO" --clobber && { ok=1; break; }
+              else
+                gproxy release upload "$TAG" "$DIR/$f" -R "$REPO" --clobber && { ok=1; break; }
+              fi
+              echo "  第 $a 次失败：$f"
+            done
+            [ $ok -eq 0 ] && echo "::warning::$f 补传失败"
+          done < /tmp/miss.txt
+
+          # 复核：全齐才转正
+          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have2.txt; then
+            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > /tmp/have2.txt \
+              || { echo "::error::复核取不到列表，中止"; exit 1; }
+          fi
+          grep -vxF -f /tmp/have2.txt /tmp/want.txt > /tmp/miss2.txt || true
+          if [ -s /tmp/miss2.txt ]; then
+            echo "::error::仍缺 $(wc -l < /tmp/miss2.txt) 个资产，不转正："
+            cat /tmp/miss2.txt
+            exit 1
+          fi
+          gdirect release edit "$TAG" -R "$REPO" --draft=false --latest \
+            || gproxy release edit "$TAG" -R "$REPO" --draft=false --latest
+          echo "✅ $(wc -l < /tmp/have2.txt) 个资产齐全，release 已转正"
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
