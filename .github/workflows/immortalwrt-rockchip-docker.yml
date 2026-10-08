@@ -171,8 +171,19 @@ jobs:
         cat .config
         make download -j$(nproc)
         echo "dl 实际路径: $(readlink -f dl)  文件数 $(ls -1 dl 2>/dev/null | wc -l)"
-        find dl -size -1024c -exec ls -l {} \; || true
-        find dl -size -1024c -exec rm -f {} \; || true
+        # ── 注意：dl 是软链时，`find dl -size -1024c` 会把「软链本身」当成一个 <1024 字节的
+        # 文件（软链大小 = 目标路径长度），随后被 -exec rm -f 删掉 —— 共享缓存从这一刻起失效，
+        # 编译阶段的所有下载都落到工作区内的实体 dl/，每轮重下。故先判类型：
+        # 软链 → 用 -L 只清目标目录里的坏文件，绝不删软链本身。
+        if [ -L dl ]; then
+          echo "dl 是软链 -> $(readlink dl)（清理目标目录内的坏文件，不删软链本身）"
+          find -L dl -maxdepth 1 -size -1024c -exec ls -l {} \; || true
+          find -L dl -maxdepth 1 -size -1024c -exec rm -f {} \; || true
+        else
+          find dl -size -1024c -exec ls -l {} \; || true
+          find dl -size -1024c -exec rm -f {} \; || true
+        fi
+        ls -ld dl
 
     - name: Compile Packages
       id: compile
