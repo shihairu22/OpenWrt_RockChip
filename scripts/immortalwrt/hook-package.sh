@@ -7,11 +7,11 @@ gitea="git.cooluc.com"
 
 # autocore
 rm -rf package/emortal/autocore
-git clone https://github.com/xuanranran/autocore-arm -b openwrt-25.12 package/emortal/autocore
+git clone https://github.com/shihairu22/autocore-arm -b openwrt-25.12 package/emortal/autocore
 
 # default settings
 rm -rf package/emortal/default-settings
-git clone https://github.com/xuanranran/default-settings -b openwrt-25.12 package/emortal/default-settings
+git clone https://github.com/shihairu22/default-settings -b openwrt-25.12 package/emortal/default-settings
 
 # custom packages
 rm -rf customfeeds/luci/applications/{luci-app-filebrowser,luci-app-argon-config}

@@ -9,7 +9,7 @@ on:
   #   types: started
 
 env:
-  USER_NAME: xuanranran
+  USER_NAME: shihairu22
   REPO_BRANCH: master
   CONFIG_FILE: configs/immortalwrt/immortalwrt.config
   DIY_SH: scripts/immortalwrt/immortalwrt.sh
@@ -19,6 +19,7 @@ env:
 jobs:
   Build:
     runs-on: self-hosted
+    timeout-minutes: 420
     outputs:
       OPENWRTROOT: ${{ steps.update.outputs.OPENWRTROOT }}
       PLATFORM: ${{ steps.compile.outputs.PLATFORM }}
@@ -47,7 +48,38 @@ jobs:
     - name: Clone Source Code
       run: |
         df -hT $PWD
+        # ── 抗抖动：家用链路对新建立的 TLS 连接有约 10% 的瞬时失败率（GnuTLS handshake failed），
+        # 而全链路约有 40 处 git clone，不重试则几乎每轮都会静默丢包或整步失败，故对 clone 统一做有限重试。
+        # 只清理「本轮克隆新建出来」的目录，绝不触碰重试前就已存在的路径。
+        git() {
+          if [ "${1:-}" != "clone" ]; then command git "$@"; return $?; fi
+          local dest="${!#}" existed=0 n=0 rc=0
+          case "$dest" in -*|http*|git@*|"") dest="" ;; esac
+          if [ -n "$dest" ] && [ -e "$dest" ]; then existed=1; fi
+          while :; do
+            if command git "$@"; then
+              return 0
+            else
+              rc=$?
+            fi
+            n=$((n + 1))
+            if [ "$n" -ge 5 ]; then break; fi
+            if [ -n "$dest" ] && [ "$existed" -eq 0 ] && [ -d "$dest" ]; then rm -rf -- "$dest"; fi
+            echo "::warning::git clone 第 $n 次失败(rc=$rc)，5 秒后重试：${dest:-$*}" >&2
+            sleep 5
+          done
+          return "$rc"
+        }
+        export -f git
         git clone https://github.com/$USER_NAME/immortalwrt -b $REPO_BRANCH openwrt
+        # ── 共享 dl 缓存：实测 actions/checkout 的 clean 会执行 git clean -ffdx，把整个
+        # openwrt/ 删掉（含 6.5G dl/ 与 67G build_dir/），所以下载缓存必须放到工作区外。
+        # 这里把 openwrt/dl 软链到共享目录，两套构建复用同一份，每轮省约 30 分钟下载。
+        # 注：不走 CONFIG_DOWNLOAD_FOLDER —— 实测 make defconfig 会把它重置为空。
+        # build_dir 在工作区内、无法持久化，编译那 ~70 分钟每轮仍要重来。
+        mkdir -p /home/ghrunner/dl-cache
+        [ -e openwrt/dl ] || ln -s /home/ghrunner/dl-cache openwrt/dl
+        ls -ld openwrt/dl
 
     - name: Update Feeds
       id: update
@@ -55,9 +87,33 @@ jobs:
         cd openwrt
         echo "OPENWRTROOT=$PWD" >> $GITHUB_ENV
         echo "OPENWRTROOT=$PWD" >> $GITHUB_OUTPUT
+        # 同上：克隆统一走带重试的 git 包装
+        # ── 抗抖动：家用链路对新建立的 TLS 连接有约 10% 的瞬时失败率（GnuTLS handshake failed），
+        # 而全链路约有 40 处 git clone，不重试则几乎每轮都会静默丢包或整步失败，故对 clone 统一做有限重试。
+        # 只清理「本轮克隆新建出来」的目录，绝不触碰重试前就已存在的路径。
+        git() {
+          if [ "${1:-}" != "clone" ]; then command git "$@"; return $?; fi
+          local dest="${!#}" existed=0 n=0 rc=0
+          case "$dest" in -*|http*|git@*|"") dest="" ;; esac
+          if [ -n "$dest" ] && [ -e "$dest" ]; then existed=1; fi
+          while :; do
+            if command git "$@"; then
+              return 0
+            else
+              rc=$?
+            fi
+            n=$((n + 1))
+            if [ "$n" -ge 5 ]; then break; fi
+            if [ -n "$dest" ] && [ "$existed" -eq 0 ] && [ -d "$dest" ]; then rm -rf -- "$dest"; fi
+            echo "::warning::git clone 第 $n 次失败(rc=$rc)，5 秒后重试：${dest:-$*}" >&2
+            sleep 5
+          done
+          return "$rc"
+        }
+        export -f git
         mkdir customfeeds
-        git clone --depth=1 https://github.com/xuanranran/openwrt-package customfeeds/lovepackages
-        git clone --depth=1 https://github.com/xuanranran/rely customfeeds/loverely
+        git clone --depth=1 https://github.com/$USER_NAME/openwrt-package customfeeds/lovepackages
+        git clone --depth=1 https://github.com/$USER_NAME/rely customfeeds/loverely
         git clone --depth=1 https://github.com/$USER_NAME/packages -b $REPO_BRANCH customfeeds/packages
         git clone --depth=1 https://github.com/$USER_NAME/luci -b $REPO_BRANCH customfeeds/luci
         git clone --depth=1 https://github.com/openwrt/routing -b $REPO_BRANCH customfeeds/routing
@@ -72,7 +128,14 @@ jobs:
     - name: Install Feeds
       run: |
         cd $OPENWRTROOT
-        ./scripts/feeds install -a
+        # feeds 是 perl 脚本、内部自己调 git clone，shell 函数覆盖不到，故整步重试
+        ok=0
+        for i in 1 2 3 4 5; do
+          if ./scripts/feeds install -a; then ok=1; break; fi
+          echo "::warning::feeds install 第 $i 次失败，10 秒后重试"
+          sleep 10
+        done
+        if [ "$ok" -ne 1 ]; then echo "::error::feeds install 连续 5 次失败"; exit 1; fi
 
     - name: Load Custom Configuration
       env:
@@ -95,14 +158,22 @@ jobs:
         cd $OPENWRTROOT
         cat .config
         make download -j$(nproc)
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        echo "dl 实际路径: $(readlink -f dl)  文件数 $(ls -1 dl 2>/dev/null | wc -l)"
+        find dl -size -1024c -exec ls -l {} \; || true
+        find dl -size -1024c -exec rm -f {} \; || true
 
     - name: Compile Packages
       id: compile
       run: |
         cd $OPENWRTROOT
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        # ── 串行锁：本机只有 16 vCPU / 24.5G 内存，两个构建同时编译会互相拖慢并逼近内存护栏，
+        # 故与 x86 流水线共用同一把锁（/home/ghrunner/locks/build.lock），后到者排队等待。
+        # flock 随本步骤的 shell 存活而持有，步骤结束自动释放。
+        mkdir -p /home/ghrunner/locks
+        exec 9>/home/ghrunner/locks/build.lock
+        if ! flock -w 7200 9; then echo "::error::等待编译锁超时（2 小时）"; exit 1; fi
+        echo "已取得编译锁（另一仓库若有构建在跑，会在这里排队）"
         echo -e "$(nproc) thread compile"
         make tools/compile -j$(nproc) || make tools/compile -j$(nproc) || make tools/compile -j1 IGNORE_ERRORS=1 V=s
         make toolchain/compile -j$(nproc) || make toolchain/compile -j$(nproc) || make toolchain/compile -j1 IGNORE_ERRORS=1 V=s

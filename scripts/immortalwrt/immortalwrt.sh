@@ -4,8 +4,8 @@ mkdir package/community
 pushd package/community
 
 # Add openwrt-packages
-git clone --depth=1 https://github.com/xuanranran/openwrt-package openwrt-package
-git clone --depth=1 https://github.com/xuanranran/rely openwrt-rely
+git clone --depth=1 https://github.com/shihairu22/openwrt-package openwrt-package
+git clone --depth=1 https://github.com/shihairu22/rely openwrt-rely
 git clone --depth=1 https://github.com/sbwml/wwan-packages wwan-packages
 popd
 

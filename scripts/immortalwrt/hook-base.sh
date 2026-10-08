@@ -19,7 +19,7 @@ sed -i '/PKG_BUILD_PARALLEL/aPKG_BUILD_FLAGS:=no-mold' customfeeds/packages/util
 
 # Realtek Wireless driver - RTL8822CS & RTL8852AU
 # rtl8822cs is a fork carrying the linux 6.18.x / backports 7.2 build fixes
-git clone https://$github/xuanranran/package_kernel_rtl8822cs package/kernel/rtl8822cs
+git clone https://$github/shihairu22/package_kernel_rtl8822cs package/kernel/rtl8822cs
 git clone https://$github/sbwml/package_kernel_rtl8852au package/kernel/rtl8852au
 
 # GCC Optimization level -O3
@@ -273,7 +273,7 @@ popd
 
 # mt76
 rm -rf package/kernel/mt76
-git clone https://github.com/xuanranran/package_kernel_mt76 package/kernel/mt76
+git clone https://github.com/shihairu22/package_kernel_mt76 package/kernel/mt76
 
 # kernel patch
 # btf: silence btf module warning messages
