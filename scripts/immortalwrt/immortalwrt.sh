@@ -81,3 +81,39 @@ if [ -f target/linux/rockchip/modules.mk ]; then
     echo "[fix-drm] rockchip DRM 的 +kmod-fb 错依赖已去掉"
   fi
 fi
+
+# ── 修复 kmod-drm-kms-helper 打包检查报 fb.ko 缺失（2026-10-09）─────────────────
+# 上面去掉了 +kmod-fb 错依赖后，rockchip 的 DRM 家族重新可见，于是暴露第二个问题：
+# drm-rockchip 的 KCONFIG 开了 CONFIG_DRM_FBDEV_EMULATION=y，它会让内核把帧缓冲核心
+# 选成模块（CONFIG_FB_CORE=m）→ 内核多出一个 fb.ko，drm_kms_helper.ko 就依赖它；
+# 而 fb.ko 只有 kmod-fb 提供，kmod-fb 又只存在于 FBDEV 目标（不含 rockchip）→
+# 打包检查直接失败：Package kmod-drm-kms-helper is missing dependencies ... fb.ko
+# （在 CI 里被 IGNORE_ERRORS=1 吞掉，只留下一句 package/kernel/linux failed to build）。
+# 修法照 x86 / bcm27xx 的做法：在目标内核配置里把帧缓冲核心写成内建，内建就不再产生
+# fb.ko，依赖自然消失；顺带把帧缓冲文本控制台（HDMI 上能看内核日志）一起打开。
+KCFG=target/linux/rockchip/armv8/config-6.18
+if [ -f "$KCFG" ] && ! grep -q '^CONFIG_FB_CORE=y' "$KCFG"; then
+  cat >> "$KCFG" <<'FBEOF'
+CONFIG_FB=y
+CONFIG_FB_CORE=y
+CONFIG_FB_DEVICE=y
+CONFIG_FB_DEFERRED_IO=y
+CONFIG_FB_SYSMEM_FOPS=y
+CONFIG_FB_SYSMEM_HELPERS=y
+CONFIG_FB_SYSMEM_HELPERS_DEFERRED=y
+CONFIG_FB_SYS_COPYAREA=y
+CONFIG_FB_SYS_FILLRECT=y
+CONFIG_FB_SYS_IMAGEBLIT=y
+CONFIG_FONT_8x16=y
+CONFIG_FONT_8x8=y
+CONFIG_FONT_SUPPORT=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+CONFIG_FRAMEBUFFER_CONSOLE_ROTATION=n
+CONFIG_CONSOLE_TRANSLATIONS=y
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_VT_HW_CONSOLE_BINDING=y
+FBEOF
+  echo "[fix-fb] rockchip 帧缓冲核心已改为内建（消掉 fb.ko 依赖，并开启文本控制台）"
+fi
