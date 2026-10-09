@@ -67,3 +67,17 @@ else
     package/community/openwrt-cnspeedtest
   unset CNSPEEDTEST_AUTH
 fi
+
+# ── 修复 rockchip 显示驱动整族被丢（2026-10-09）───────────────────────────────
+# 上游把 rockchip 的 DRM 包写成依赖 +kmod-fb，而 kmod-fb 只存在于 bcm27xx / sunxi /
+# x86 这些 FBDEV 目标（package/kernel/linux/modules/video.mk 里的 FBDEV_TARGETS）。
+# 依赖一传播，整套 DRM（含 HDMI 输出）在 rockchip 上就被判成「不可用」而全部丢掉，
+# 且不报错。这里只去掉这一个错的依赖，让 DRM 家族重新可见；不改其它目标的行为。
+if [ -f target/linux/rockchip/modules.mk ]; then
+  sed -i '/^define KernelPackage\/drm-rockchip$/,/^endef$/ s/ +kmod-fb$//' target/linux/rockchip/modules.mk
+  if grep -q '+kmod-fb' target/linux/rockchip/modules.mk; then
+    echo "::warning::rockchip DRM 的 +kmod-fb 错依赖没能去掉，显示驱动可能仍被丢弃"
+  else
+    echo "[fix-drm] rockchip DRM 的 +kmod-fb 错依赖已去掉"
+  fi
+fi

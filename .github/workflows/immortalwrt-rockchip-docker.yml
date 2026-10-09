@@ -160,8 +160,12 @@ jobs:
         CONFIG_DOCKER_STO_EXT4=y
         CONFIG_PACKAGE_luci-app-dockerman=y
         ' >> .config
-        echo "::group::View 'make defconfig' output"
-        make defconfig
+        # ── 收敛 .config：kconfig 从「稀疏配置」起步时会把一部分明确 =y 的符号解析成 n
+        # （实测 rockchip 的 DRM 家族整族被丢，固件里既没显示驱动也不报错）。
+        # 先存一份「要求开启」的快照，再由脚本反复贴回 + defconfig 直到解析结果稳定。
+        cp -f .config .config.requested
+        echo "::group::View 'make defconfig' output（含收敛，最多 3 轮）"
+        bash ../scripts/immortalwrt/cfg-converge.sh .config.requested . 3
         echo "::endgroup::"
 
     - name: Download Package
