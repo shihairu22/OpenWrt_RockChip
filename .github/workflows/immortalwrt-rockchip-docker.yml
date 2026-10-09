@@ -267,11 +267,18 @@ jobs:
           echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
-      # 上传单独走直连：实测经 NAS 代理到 uploads.github.com 仅 0.04 MB/s，
-      # 直连 260MB 单文件 7.9-8.2 MB/s（快约 200 倍）。runner 的 .env 会把代理注入每个步骤，
-      # 而 github.com 不在 no_proxy 里，所以这里必须显式置空。
-      # continue-on-error：个别文件传失败不再把整步判死，交给下一步兜底。
+      # 上传策略：受控 6 路并发 + 逐文件重试（直连优先、失败退代理）。
+      # 实测 2026-10-09（runner 在用户家中，家宽上行约 100Mbps）：
+      #   直连单流 190MB → 8.56 MB/s；走 NAS 代理单流 95MB → 8.07 MB/s
+      #   （代理并不慢，旧注释里「代理只有 0.04 MB/s」已过时）；
+      #   直连 4 并发合计 7.4 MB/s、8 并发合计 10.0 MB/s
+      #   ⇒ 天花板是家宽上行（8–10 MB/s），并发不能无脑加。
+      # 反面教材：原来一次性并发上传 24 个文件，单流被摊薄到 0.3 MB/s，
+      #   触发 GitHub「Upload body timed out due to inactivity」(09:10:15)，
+      #   3 个文件成了空壳（nanopi-r2c / nanopi-r4se / orangepi-5），另一个
+      #   （nanopi-r2s）一路卡到 09:35:42：整步 28 分 31 秒，其中约 19.5 分钟在干等。
+      # 6 路并发下 6.12 GiB 预计 13–15 分钟（上行理论下限约 12.8 分钟）。
+      # continue-on-error：个别文件仍失败不把整步判死，交给下一步按大小+state 复核补传。
       continue-on-error: true
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
@@ -279,11 +286,49 @@ jobs:
           http_proxy: ""
           https_proxy: ""
           no_proxy: "*"
-      with:
-          name: ${{ steps.tag.outputs.release_date }} immortalwrt
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          body_path: release.txt
-          files: ${{ env.FIRMWARE }}/*
+          TAG: ${{ steps.tag.outputs.release_tag }}
+          TITLE: ${{ steps.tag.outputs.release_date }} immortalwrt
+          FIRMWARE: ${{ env.FIRMWARE }}
+      run: |
+          set -u
+          REPO="${GITHUB_REPOSITORY}"
+          DIR="$FIRMWARE"
+          gdirect() { env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy no_proxy='*' NO_PROXY='*' gh "$@"; }
+          gproxy()  { http_proxy=http://10.0.0.221:7890 https_proxy=http://10.0.0.221:7890 no_proxy='10.0.0.0/8,127.0.0.1,localhost,::1' gh "$@"; }
+
+          echo "待上传：$(ls -1 "$DIR" | wc -l) 个文件（$DIR）"
+
+          # 建 draft release：中途失败不会留下公开的半成品，复核全齐后再转正
+          if ! gdirect release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gdirect release create "$TAG" -R "$REPO" --draft --title "$TITLE" --notes-file release.txt \
+              || gproxy release create "$TAG" -R "$REPO" --draft --title "$TITLE" --notes-file release.txt \
+              || { echo "::error::建 draft release 失败"; exit 1; }
+          fi
+
+          # 单文件上传：直连/代理交替，最多 6 次
+          upload_one() {
+            local f="$1" a
+            for a in 1 2 3 4 5 6; do
+              if [ $((a % 2)) -eq 1 ]; then
+                gdirect release upload "$TAG" "$f" -R "$REPO" --clobber && return 0
+              else
+                gproxy release upload "$TAG" "$f" -R "$REPO" --clobber && return 0
+              fi
+              echo "  第 $a 次失败：$(basename "$f")"; sleep 5
+            done
+            echo "::warning::$(basename "$f") 上传失败（交给复核步骤补传）"
+            return 1
+          }
+
+          # 并发池：最多 6 个同时在传（实测 24 并发把单流摊薄到 0.3 MB/s 并触发超时）
+          MAXP=6
+          for f in "$DIR"/*; do
+            [ -f "$f" ] || continue
+            while [ "$(jobs -rp | wc -l)" -ge "$MAXP" ]; do wait -n 2>/dev/null || sleep 1; done
+            upload_one "$f" &
+          done
+          wait
+          echo "上传阶段结束（失败项由下一步按大小+state 复核补传）"
 
     - name: Verify and finish release upload
       # 兜底：逐文件比对远端资产名，缺的用 gh 重试补齐，全齐后才转正 release。
