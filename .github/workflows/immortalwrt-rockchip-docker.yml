@@ -306,14 +306,22 @@ jobs:
             || { echo "::error::取不到 release id，中止"; exit 1; }
           echo "release id=$RID"
 
-          # 列表取不到就中止——绝不能让「空列表」被当成「全都缺」而全量重传
-          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have.txt; then
-            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have.txt \
+          # 资产清单必须连「大小 + state」一起取：只比名字会被「记录已建、body 没传完」的
+          # 空壳骗过 —— 实测 3 个文件 body 超时后记录仍在 ⇒ 复核算成「已有」⇒ 空壳随后被
+          # GitHub 回收 ⇒ 最终少 3 个资产，而 release 却显示「转正成功」。
+          fetch_assets() {
+            gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[] | "\(.name)\t\(.size)\t\(.state)"' > "$1" \
+              || gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[] | "\(.name)\t\(.size)\t\(.state)"' > "$1" \
               || { echo "::error::资产列表取不到，中止"; exit 1; }
-          fi
-          ls -1 "$DIR" > $TMPD/want.txt
-          grep -vxF -f $TMPD/have.txt $TMPD/want.txt > $TMPD/miss.txt || true
-          echo "应有 $(wc -l < $TMPD/want.txt) 个 / 已有 $(wc -l < $TMPD/have.txt) 个 / 需补传 $(wc -l < $TMPD/miss.txt) 个"
+          }
+          # 本地应有清单：名字<TAB>字节数（跳过目录）
+          ( cd "$DIR" && for f in *; do [ -f "$f" ] && printf '%s\t%s\n' "$f" "$(stat -c%s "$f")"; done ) > $TMPD/want.txt
+          fetch_assets $TMPD/have.txt
+          # 缺 / 大小不符 / state 不是 uploaded 的，一律算「需补传」
+          awk -F'\t' 'NR==FNR { ok[$1] = ($3=="uploaded" ? $2 : "BAD"); next }
+                      { if (!($1 in ok) || ok[$1] != $2) print $1 }' \
+            $TMPD/have.txt $TMPD/want.txt > $TMPD/miss.txt
+          echo "应有 $(wc -l < $TMPD/want.txt) 个 / 远端记录 $(wc -l < $TMPD/have.txt) 条 / 需补传 $(wc -l < $TMPD/miss.txt) 个"
 
           while IFS= read -r f; do
             [ -z "$f" ] && continue
@@ -329,12 +337,11 @@ jobs:
             [ $ok -eq 0 ] && echo "::warning::$f 补传失败"
           done < $TMPD/miss.txt
 
-          # 复核：全齐才转正
-          if ! gdirect api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have2.txt; then
-            gproxy api "repos/$REPO/releases/$RID/assets?per_page=100" --jq '.[].name' > $TMPD/have2.txt \
-              || { echo "::error::复核取不到列表，中止"; exit 1; }
-          fi
-          grep -vxF -f $TMPD/have2.txt $TMPD/want.txt > $TMPD/miss2.txt || true
+          # 复核：全齐（且大小 / state 都对）才转正
+          fetch_assets $TMPD/have2.txt
+          awk -F'\t' 'NR==FNR { ok[$1] = ($3=="uploaded" ? $2 : "BAD"); next }
+                      { if (!($1 in ok) || ok[$1] != $2) print $1 }' \
+            $TMPD/have2.txt $TMPD/want.txt > $TMPD/miss2.txt
           if [ -s $TMPD/miss2.txt ]; then
             echo "::error::仍缺 $(wc -l < $TMPD/miss2.txt) 个资产，不转正："
             cat $TMPD/miss2.txt
