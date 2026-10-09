@@ -33,6 +33,18 @@ git clone https://github.com/sbwml/packages_utils_dockerd customfeeds/packages/u
 git clone https://github.com/sbwml/packages_utils_containerd customfeeds/packages/utils/containerd
 git clone https://github.com/sbwml/packages_utils_runc customfeeds/packages/utils/runc
 
+# containerd 2.4.1 的 vendor/github.com/urfave/cli/v3 用 //go:embed autocomplete 引用
+# 4 个「没有扩展名」的补全脚本；而 golang-build.sh 的 configure 只把「源码类文件
+# (*.c/*.cc/*.cpp/*.go/*.h/*.hh/*.hpp/*.proto/*.s) + testdata + go.mod/sum/work +
+# GO_PKG_INSTALL_EXTRA 里点名的文件」搬进 .go_work/build/src，这 4 个文件全部不符合，
+# 目录被漏掉 → 编译报 "pattern autocomplete: no matching files found"（实测 2026-10-09）。
+# 按 golang-package.mk 第 184 行 GO_INSTALL_EXTRA="$(GO_PKG_INSTALL_EXTRA)" 的机制，
+# 在清单里补一条模式即可命中这 4 个文件；grep 守卫保证幂等。
+CTR_MK=customfeeds/packages/utils/containerd/Makefile
+if ! grep -q 'urfave/cli/v3/autocomplete/' "$CTR_MK"; then
+  sed -i 's|^GO_PKG_INSTALL_EXTRA:=\\$|&\n\tvendor/github.com/urfave/cli/v3/autocomplete/ \\|' "$CTR_MK"
+fi
+
 # samba4 - bump version
 # rm -rf customfeeds/packages/net/samba4
 # git clone https://github.com/sbwml/feeds_packages_net_samba4 customfeeds/packages/net/samba4
