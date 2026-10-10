@@ -62,8 +62,8 @@ else
   GIT_CONFIG_COUNT=1 \
   GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
   GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $CNSPEEDTEST_AUTH" \
-  git clone --depth=1 --branch master \
-    https://github.com/xuanranran/openwrt-cnspeedtest.git \
+  git clone --depth=1 --branch main \
+    https://github.com/shihairu22/openwrt-cnspeedtest.git \
     package/community/openwrt-cnspeedtest
   unset CNSPEEDTEST_AUTH
 fi
