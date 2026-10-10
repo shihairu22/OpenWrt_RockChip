@@ -346,9 +346,10 @@ jobs:
           gdirect() { env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy no_proxy='*' NO_PROXY='*' gh "$@"; }
           gproxy()  { http_proxy=http://10.0.0.221:7890 https_proxy=http://10.0.0.221:7890 no_proxy='10.0.0.0/8,127.0.0.1,localhost,::1' gh "$@"; }
 
-          RID=$(gdirect api "repos/$REPO/releases/tags/$TAG" --jq .id 2>/dev/null) \
-            || RID=$(gproxy api "repos/$REPO/releases/tags/$TAG" --jq .id 2>/dev/null) \
-            || { echo "::error::取不到 release id，中止"; exit 1; }
+          # 注意：draft release 按 tag 查询会 404（即使有推送权限，实测复现），必须走列表过滤
+          RID=$(gdirect api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1)
+          [ -n "$RID" ] || RID=$(gproxy api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1)
+          [ -n "$RID" ] || { echo "::error::取不到 release id，中止"; exit 1; }
           echo "release id=$RID"
 
           # 资产清单必须连「大小 + state」一起取：只比名字会被「记录已建、body 没传完」的
