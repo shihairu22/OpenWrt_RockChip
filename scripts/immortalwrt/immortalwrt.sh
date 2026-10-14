@@ -1,6 +1,6 @@
 #!/bin/bash
 # Clone community packages to package/community
-mkdir package/community
+mkdir -p package/community
 pushd package/community
 
 # Add openwrt-packages
@@ -52,20 +52,6 @@ sed -i 's/services/vpn/g' customfeeds/luci/applications/luci-app-tailscale-commu
 rm -rf package/base-files/files/etc/banner
 cp -f $GITHUB_WORKSPACE/data/banner package/base-files/files/etc/banner
 
-# Add private cnspeedtest packages
-rm -rf package/community/openwrt-cnspeedtest
-if [ -z "$CNSPEEDTEST_TOKEN" ]; then
-  echo "CNSPEEDTEST_TOKEN is not configured; skipping private cnspeedtest packages"
-else
-  CNSPEEDTEST_AUTH="$(printf 'x-access-token:%s' "$CNSPEEDTEST_TOKEN" | base64 | tr -d '\n')"
-  GIT_CONFIG_COUNT=1 \
-  GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-  GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $CNSPEEDTEST_AUTH" \
-  git clone --depth=1 --branch main \
-    https://github.com/shihairu22/openwrt-cnspeedtest.git \
-    package/community/openwrt-cnspeedtest
-  unset CNSPEEDTEST_AUTH
-fi
 
 # ── 修复 rockchip 显示驱动整族被丢（2026-10-09）───────────────────────────────
 # 上游把 rockchip 的 DRM 包写成依赖 +kmod-fb，而 kmod-fb 只存在于 bcm27xx / sunxi /

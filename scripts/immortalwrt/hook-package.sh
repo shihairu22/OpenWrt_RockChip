@@ -136,3 +136,34 @@ rm -rf package/network/utils/nftables/patches
 # del packages
 rm -rf customfeeds/packages/net/onionshare-cli
 rm -rf package/emortal/cpufreq
+
+# 修改开源站地址 (按内容删除国内镜像, 避免行号漂移破坏 JSON)
+sed -i '\#mirror.iscas.ac.cn/kernel.org#d; \#mirrors.ustc.edu.cn/kernel.org#d; \#mirror.nju.edu.cn/kernel.org#d; \#mirrors.ustc.edu.cn/gnome#d; \#mirror.nju.edu.cn/gnome#d' scripts/projectsmirrors.json
+
+# Prefer the official kernel.org CDN; keep the edge mirror and other fallbacks
+sed -i '/"@KERNEL": \[/,/]/ {
+  \#"https://mirrors.edge.kernel.org/pub"#d
+  s#"https://cdn.kernel.org/pub"#"https://cdn.kernel.org/pub",\n\t\t"https://mirrors.edge.kernel.org/pub"#
+}' scripts/projectsmirrors.json
+
+# Prefer the official Samba source; keep other mirrors as fallbacks
+samba_makefile="customfeeds/packages/net/samba4/Makefile"
+if [ -f "$samba_makefile" ]; then
+  sed -i '\#https://download.samba.org/pub/samba/stable/#d; \#https://www.nic.funet.fi/index/samba/pub/samba/stable/#s/[[:space:]]*\\$//; /^PKG_SOURCE_URL:= \\/a\        https://download.samba.org/pub/samba/stable/ \\' "$samba_makefile"
+fi
+
+# Add private cnspeedtest packages
+mkdir -p package/community
+rm -rf package/community/openwrt-cnspeedtest
+if [ -z "$CNSPEEDTEST_TOKEN" ]; then
+  echo "CNSPEEDTEST_TOKEN is not configured; skipping private cnspeedtest packages"
+else
+  CNSPEEDTEST_AUTH="$(printf 'x-access-token:%s' "$CNSPEEDTEST_TOKEN" | base64 | tr -d '\n')"
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+  GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $CNSPEEDTEST_AUTH" \
+  git clone --depth=1 --branch main \
+    https://github.com/shihairu22/openwrt-cnspeedtest.git \
+    package/community/openwrt-cnspeedtest
+  unset CNSPEEDTEST_AUTH
+fi
