@@ -37,8 +37,9 @@ curl -s $mirror/openwrt/patch/dpdk/dpdk/patches/201-r8125-add-r8125-ethernet-pol
 curl -s $mirror/openwrt/patch/dpdk/numactl/Makefile > package/emortal/numactl/Makefile
 
 # fstools
-rm -rf package/system/fstools
-git clone https://$github/sbwml/package_system_fstools -b openwrt-25.12 package/system/fstools
+# Keep the ImmortalWrt source version and extroot patch; add sbwml filesystem changes.
+mkdir -p package/system/fstools/patches
+cp -f "$GITHUB_WORKSPACE"/data/patches/fstools/*.patch package/system/fstools/patches/
 # util-linux
 mkdir -p package/utils/util-linux/patches
 curl -s https://raw.githubusercontent.com/sbwml/package_utils_util-linux/refs/heads/openwrt-25.12/patches/0001-ntfs-use-ntfs3-for-read-write-filesystem.patch > package/utils/util-linux/patches/0002-ntfs-use-ntfs3-for-read-write-filesystem.patch
@@ -64,12 +65,13 @@ sed -i 's|$(PROJECT_GIT)/project|https://github.com/openwrt|g' package/network/c
 mkdir -p package/libs/libnftnl/patches
 curl -s $mirror/openwrt/patch/firewall4/libnftnl/0001-libnftnl-add-fullcone-expression-support.patch > package/libs/libnftnl/patches/0001-libnftnl-add-fullcone-expression-support.patch
 curl -s $mirror/openwrt/patch/firewall4/libnftnl/0002-libnftnl-add-brcm-fullcone-support.patch > package/libs/libnftnl/patches/0002-libnftnl-add-brcm-fullcone-support.patch
+cp -f "$GITHUB_WORKSPACE/data/patches/libnftnl/0003-libnftnl-fullcone-adapt-setter-api.patch" package/libs/libnftnl/patches/0003-libnftnl-fullcone-adapt-setter-api.patch
 # fix build on rhel9
 sed -i '/^PKG_BUILD_FLAGS[[:space:]]*:/aPKG_FIXUP:=autoreconf' package/libs/libnftnl/Makefile
 # nftables
 mkdir -p package/network/utils/nftables/patches
-curl -s $mirror/openwrt/patch/firewall4/nftables/0001-nftables-add-fullcone-expression-support.patch > package/network/utils/nftables/patches/0001-nftables-add-fullcone-expression-support.patch
-curl -s $mirror/openwrt/patch/firewall4/nftables/0002-nftables-add-brcm-fullconenat-support.patch > package/network/utils/nftables/patches/0002-nftables-add-brcm-fullconenat-support.patch
+cp -f "$GITHUB_WORKSPACE/data/patches/nftables/0001-nftables-add-fullcone-expression-support.patch" package/network/utils/nftables/patches/0001-nftables-add-fullcone-expression-support.patch
+cp -f "$GITHUB_WORKSPACE/data/patches/nftables/0002-nftables-add-brcm-fullconenat-support.patch" package/network/utils/nftables/patches/0002-nftables-add-brcm-fullconenat-support.patch
 
 # FullCone module
 # rm -rf package/network/utils/fullconenat-nft
